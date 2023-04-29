@@ -4,6 +4,8 @@
 #include <linux/uaccess.h>
 #include <linux/init.h>
 #include <linux/printk.h>
+#include <linux/slab.h>
+#include <linux/string.h>
 
 #define PHONEBOOK_MAGIC 'p'
 #define GET_USER _IOR(PHONEBOOK_MAGIC, 1, char*)
@@ -28,7 +30,6 @@ static int phonebook_uevent(struct device *dev, struct kobj_uevent_env *env)
     add_uevent_var(env, "DEVMODE=%#o", 0666);
     return 0;
 }
-//static struct device* phonebook_device;
 
 static int phonebook_open(struct inode* inode, struct file* file) 
 {
@@ -51,27 +52,33 @@ static ssize_t phonebook_write(struct file* file, const char* buffer, size_t len
 
 #define MAX_PHONEBOOK_SIZE 100
 
-static struct user_data phonebook[MAX_PHONEBOOK_SIZE];
+static struct user_data* phonebook;
 static int phonebook_size = 0;
 
 long my_get_user(const char* surname, unsigned int len, struct user_data* output_data) {
-    pr_info("Getting user...\n");
+    const char* kernel_surname = kmalloc(len * sizeof(char), GFP_KERNEL);
+    copy_from_user(kernel_surname, surname, len);
+    pr_info("Getting user...%s\n", kernel_surname);
     int i;
     for (i = 0; i < phonebook_size; i++) {
-        if (strncmp(surname, phonebook[i].surname, len) == 0) {
-            memcpy(output_data, &phonebook[i], sizeof(struct user_data));
+        pr_info("%s\n", phonebook[i].surname);
+        if (strncmp(kernel_surname, phonebook[i].surname, len) == 0) {
+            copy_to_user(output_data, &phonebook[i], sizeof(struct user_data));
             pr_info("User found successfully\n");
+            kfree(kernel_surname);
             return 0;
         }
     }
     pr_info("User not found\n");
+    kfree(kernel_surname);
     return -1;
 }
 
 long my_add_user(struct user_data* input_data) {
     pr_info("Adding user...\n");
     if (phonebook_size < MAX_PHONEBOOK_SIZE) {
-        memcpy(&phonebook[phonebook_size], input_data, sizeof(struct user_data));
+        copy_from_user(&phonebook[phonebook_size], input_data, sizeof(struct user_data));
+        pr_info("%s\n", phonebook[phonebook_size].name); 
         phonebook_size++;
         return 0;
     }
@@ -81,28 +88,34 @@ long my_add_user(struct user_data* input_data) {
 
 long my_del_user(const char* surname, unsigned int len)
 {
+    const char* kernel_surname = kmalloc(len * sizeof(char), GFP_KERNEL);
+    copy_from_user(kernel_surname, surname, len);
     pr_info("Deleting user...\n");
     int i;
     for (i = 0; i < phonebook_size; i++) {
-        if (strncmp(surname, phonebook[i].surname, len) == 0) {
-            memmove(&phonebook[i], &phonebook[i+1], (phonebook_size-i-1)*sizeof(struct user_data));
+        if (strncmp(kernel_surname, phonebook[i].surname, len) == 0) {
+            memmove(&phonebook[i], &phonebook[i+1], (phonebook_size - i - 1)*sizeof(struct user_data));
             phonebook_size--;
+            kfree(kernel_surname);
             return 0;
         }
     }
+    kfree(kernel_surname);
     pr_alert("User doesn't exist\n");
     return -1;
 }
+
+#define str_len(x) (sizeof(x) / sizeof((x)[0]))
 
 static long phonebook_ioctl(struct file* file, unsigned int cmd, unsigned long arg) 
 {
     switch (cmd) {
         case GET_USER:
-            return my_get_user((const char*)arg, strlen((const char*)arg), (struct user_data*)arg);
+            return my_get_user((const char*)arg, str_len((const char*)arg), (struct user_data*)arg);
         case ADD_USER:
             return my_add_user((struct user_data*)arg);
         case DEL_USER:
-            return my_del_user((const char*)arg, strlen((const char*)arg));
+            return my_del_user((const char*)arg, str_len((const char*)arg));
         default:
             return -EINVAL;
     }
@@ -132,11 +145,17 @@ static int __init phonebook_init(void)
     phonebook_class->dev_uevent = phonebook_uevent;
     device_create(phonebook_class, NULL, MKDEV(major_number, 0), NULL, DEVICE_NAME);
 
+    phonebook = kmalloc(MAX_PHONEBOOK_SIZE * sizeof(struct user_data), GFP_KERNEL);
+    if (!phonebook) {
+        pr_info("Unable to allocate phonebook\n");
+    }
+
     pr_info("Device created on /dev/%s\n", DEVICE_NAME);
     return 0;
 }
 
 static void __exit phonebook_exit(void) {
+    kfree(phonebook);
     device_destroy(phonebook_class, MKDEV(major_number, 0));
     class_unregister(phonebook_class);
     class_destroy(phonebook_class);

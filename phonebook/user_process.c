@@ -11,7 +11,7 @@ int main() {
     int fd = open("/dev/phonebook", O_RDWR);
     if (fd < 0) {
         perror("open");
-        exit(1);
+        return 1;
     }
 
     struct user_data user;
@@ -22,29 +22,37 @@ int main() {
     strcpy(user.email, "john.doe@example.com");
     
     
-    /*
+    
     if (ioctl(fd, ADD_USER, &user) < 0) {
-        perror("ioctl");
-        exit(1);
-    }*/
-    
-    
-    char surname[20] = "Doe";
-    if (ioctl(fd, GET_USER, (unsigned long)surname) < 0) {
-        perror("ioctl");
-        exit(1);
+        perror("not added");
+        return 1;
     }
-    /*
-    printf("Name: %s\n", user.name);
-    printf("Surname: %s\n", user.surname);
-    printf("Age: %d\n", user.age);
-    printf("Phone: %s\n", user.phone);
-    printf("Email: %s\n", user.email);
+    
+    
+    char arg[sizeof(struct user_data)] = "Doe";
+    if (ioctl(fd, GET_USER, arg) < 0) {
+        perror("not found");
+        return 1;
+    }
+    
+    printf("Name: %s\n", ((struct user_data*)arg)->name);
+    printf("Surname: %s\n", ((struct user_data*)arg)->surname);
+    printf("Age: %d\n", ((struct user_data*)arg)->age);
+    printf("Phone: %s\n",((struct user_data*)arg)->phone);
+    printf("Email: %s\n", ((struct user_data*)arg)->email);
 
-    if (ioctl(fd, DEL_USER, surname) < 0) {
+    char usr_to_del[sizeof(struct user_data)] = "Doe";
+    if (ioctl(fd, DEL_USER, usr_to_del) < 0) {
         perror("ioctl");
-        exit(1);
-    }*/
+        return 1;
+    }
+
+    if(ioctl(fd, GET_USER, usr_to_del) == 0) {
+        perror("not deleted!");
+        return 1;
+    }
+
+
 
     close(fd);
     return 0;
